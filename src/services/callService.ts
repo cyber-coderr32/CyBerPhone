@@ -13,9 +13,10 @@ import {
   deleteDoc,
   getDoc
 } from 'firebase/firestore';
-import { db } from './firebaseClient';
+import { db, auth } from './firebaseClient';
 import { Call, CallStatus, CallType, User, NotificationType } from '../types';
 import { createNotification } from './storageService';
+import { safeJsonStringify } from '../lib/utils';
 
 enum OperationType {
   CREATE = 'create',
@@ -30,10 +31,16 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   const errInfo = {
     error: error instanceof Error ? error.message : String(error),
     operationType,
-    path
+    path,
+    authInfo: {
+      userId: auth?.currentUser?.uid || null,
+      email: auth?.currentUser?.email || null,
+      emailVerified: auth?.currentUser?.emailVerified || null,
+    }
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  const serialized = safeJsonStringify(errInfo);
+  console.error('Firestore Error: ', serialized);
+  throw new Error(serialized);
 }
 
 const CALLS_COLLECTION = 'calls';

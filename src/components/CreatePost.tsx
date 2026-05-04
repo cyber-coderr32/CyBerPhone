@@ -262,7 +262,7 @@ const CreatePost: React.FC<CreatePostProps> = ({ currentUser, onPostCreated, ref
 
   if (!isExpanded) {
     return (
-      <div className="bg-white dark:bg-darkbg rounded-[2rem] p-6 border border-gray-200 dark:border-white/5 shadow-lg flex items-center gap-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5 transition-all animate-fade-in" onClick={() => setIsExpanded(true)}>
+      <div className="bg-white dark:bg-darkcard md:rounded-[1.5rem] p-6 border border-gray-200 dark:border-white/5 shadow-sm flex items-center gap-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5 transition-all animate-fade-in" onClick={() => setIsExpanded(true)}>
         <img src={currentUser.profilePicture} className="w-12 h-12 rounded-2xl object-cover" />
         <div className="flex-1 text-gray-500 dark:text-gray-400 font-bold text-sm">
           {t('what_thinking')}
@@ -275,7 +275,7 @@ const CreatePost: React.FC<CreatePostProps> = ({ currentUser, onPostCreated, ref
   }
 
   return (
-    <div className="bg-white dark:bg-darkbg rounded-[2.5rem] p-8 border border-gray-200 dark:border-white/5 shadow-2xl animate-fade-in relative z-50">
+    <div className="bg-white dark:bg-darkcard md:rounded-[1.5rem] p-8 border border-gray-200 dark:border-white/5 shadow-2xl animate-fade-in relative z-50">
        <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
              <img src={currentUser.profilePicture} className="w-10 h-10 rounded-xl object-cover" />

@@ -13,6 +13,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isVerified() {
+      return isSignedIn() && (request.auth.token.email_verified == true || isAdmin());
+    }
+
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
@@ -25,15 +29,15 @@ service cloud.firestore {
     }
 
     function isCallParty(data) {
-      return data != null && (
+      return isSignedIn() && data != null && (
         data.get('callerId', '') == request.auth.uid || 
         data.get('receiverId', '') == request.auth.uid
       );
     }
 
     function isValidCall(data) {
-      return data.get('callerId', '') is string && data.callerId.size() <= 128 &&
-             data.get('receiverId', '') is string && data.receiverId.size() <= 128 &&
+      return data.get('callerId', '') is string && data.get('callerId', '').size() >= 1 &&
+             data.get('receiverId', '') is string && data.get('receiverId', '').size() >= 1 &&
              data.get('type', '') in ['VOICE', 'VIDEO'] &&
              data.get('status', '') in ['RINGING', 'ACCEPTED', 'REJECTED', 'ENDED', 'MISSED', 'TIMED_OUT'] &&
              data.get('timestamp', 0) is number;
@@ -49,9 +53,9 @@ service cloud.firestore {
 
     match /profiles/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId) && (request.resource.data.get('isAdmin', false) == false || isAdmin());
+      allow create: if isVerified() && isOwner(userId) && (request.resource.data.get('isAdmin', false) == false || isAdmin());
       allow update: if isAdmin() || (
-        isSignedIn() && (
+        isVerified() && (
           (isOwner(userId) && (
             // Owner can change fields. If balance is changed, it must NOT increase (spending is ok, self-funding is not)
             (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['balance']) || 
@@ -70,7 +74,7 @@ service cloud.firestore {
     match /public_profiles/{userId} {
       allow read: if true;
       allow write: if isAdmin() || (
-        isSignedIn() && (
+        isVerified() && (
           (isOwner(userId) && (
             (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['balance']) || 
              request.resource.data.get('balance', 0) <= resource.data.get('balance', 0))
@@ -85,82 +89,85 @@ service cloud.firestore {
 
     match /posts/{postId} {
       allow read: if true;
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && (
-        resource.data.userId == request.auth.uid || 
-        request.resource.data.diff(resource.data).affectedKeys().hasAny(['likes', 'comments', 'shares', 'saves', 'views'])
-      );
-      allow delete: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isVerified() && request.resource.data.get('userId', '') == request.auth.uid;
+      allow update: if (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'comments', 'shares', 'saves', 'views'])) || 
+                    (isVerified() && resource.data.get('userId', '') == request.auth.uid);
+      allow delete: if (isVerified() && resource.data.get('userId', '') == request.auth.uid) || isAdmin();
     }
 
     match /chats/{chatId} {
       allow read: if isSignedIn() && (request.auth.uid in resource.data.participants || resource.data.get('isPublic', false) == true);
-      allow create: if isSignedIn();
-      allow update: if isSignedIn() && (request.auth.uid in resource.data.participants);
+      allow create: if isVerified();
+      allow update: if isVerified() && (request.auth.uid in resource.data.participants);
       allow delete: if isAdmin();
     }
 
     match /notifications/{notificationId} {
-      allow read: if isSignedIn() && resource.data.recipientId == request.auth.uid;
-      allow create: if isSignedIn();
-      allow update, delete: if isSignedIn() && resource.data.recipientId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.get('recipientId', '') == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.get('recipientId', '') == request.auth.uid;
+      allow create: if isSignedIn(); // System or Actor creates
+      allow update, delete: if isSignedIn() && resource.data.get('recipientId', '') == request.auth.uid;
     }
 
     match /sales/{saleId} {
-      allow read: if isSignedIn() && (
-        resource.data.buyerId == request.auth.uid || 
-        resource.data.sellerId == request.auth.uid || 
+      allow get: if isSignedIn() && (
+        resource.data.get('buyerId', '') == request.auth.uid || 
+        resource.data.get('sellerId', '') == request.auth.uid || 
         resource.data.get('affiliateUserId', '') == request.auth.uid ||
         isAdmin()
       );
-      allow create: if isSignedIn() && request.resource.data.buyerId == request.auth.uid;
-      allow update: if isSignedIn() && (
-        resource.data.buyerId == request.auth.uid || 
-        resource.data.sellerId == request.auth.uid ||
+      allow list: if isSignedIn() && (
+        resource.data.get('buyerId', '') == request.auth.uid || 
+        resource.data.get('sellerId', '') == request.auth.uid || 
+        resource.data.get('affiliateUserId', '') == request.auth.uid ||
         isAdmin()
       );
+      allow create: if isVerified() && request.resource.data.get('buyerId', '') == request.auth.uid;
+      allow update: if isAdmin() || (isVerified() && (
+        resource.data.get('buyerId', '') == request.auth.uid || 
+        resource.data.get('sellerId', '') == request.auth.uid
+      ));
     }
 
     match /affiliate_links/{linkId} {
       allow read: if isSignedIn() && (
-        resource.data.userId == request.auth.uid || 
-        resource.data.sellerId == request.auth.uid ||
+        resource.data.get('userId', '') == request.auth.uid || 
+        resource.data.get('sellerId', '') == request.auth.uid ||
         isAdmin()
       );
-      allow create: if isSignedIn() && 
-                    request.resource.data.userId == request.auth.uid &&
-                    request.resource.data.sellerId is string &&
-                    request.resource.data.productId is string;
-      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isVerified() && 
+                    request.resource.data.get('userId', '') == request.auth.uid &&
+                    request.resource.data.get('sellerId', '') is string &&
+                    request.resource.data.get('productId', '') is string;
+      allow update, delete: if isVerified() && resource.data.get('userId', '') == request.auth.uid;
     }
 
     match /transactions/{transactionId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      // Allows creating transaction for self or if it's a SALE record being synced
-      allow create: if isSignedIn() && (
-        request.resource.data.userId == request.auth.uid || 
-        request.resource.data.type == 'SALE'
+      allow read: if isSignedIn() && (resource.data.get('userId', '') == request.auth.uid || isAdmin());
+      allow create: if isVerified() && (
+        request.resource.data.get('userId', '') == request.auth.uid || 
+        request.resource.data.get('type', '') == 'SALE'
       );
     }
 
     match /stores/{storeId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update, delete: if isOwner(resource.data.professorId) || isAdmin();
+      allow create: if isVerified();
+      allow update, delete: if isAdmin() || (isVerified() && resource.data.get('professorId', '') == request.auth.uid);
     }
 
     match /products/{productId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update: if isSignedIn() && (
-        (exists(/databases/$(database)/documents/stores/$(resource.data.storeId)) &&
-         get(/databases/$(database)/documents/stores/$(resource.data.storeId)).data.professorId == request.auth.uid) ||
-        isAdmin() ||
+      allow create: if isVerified();
+      allow update: if isAdmin() || (isVerified() && (
+        (exists(/databases/$(database)/documents/stores/$(resource.data.get('storeId', ''))) &&
+         get(/databases/$(database)/documents/stores/$(resource.data.get('storeId', ''))).data.get('professorId', '') == request.auth.uid) ||
         (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ratings', 'averageRating', 'ratingCount', 'soldCount']))
-      );
+      ));
       allow delete: if isAdmin() || (
-        exists(/databases/$(database)/documents/stores/$(resource.data.storeId)) &&
-        get(/databases/$(database)/documents/stores/$(resource.data.storeId)).data.professorId == request.auth.uid
+        isVerified() && 
+        exists(/databases/$(database)/documents/stores/$(resource.data.get('storeId', ''))) &&
+        get(/databases/$(database)/documents/stores/$(resource.data.get('storeId', ''))).data.get('professorId', '') == request.auth.uid
       );
     }
 
@@ -177,49 +184,50 @@ service cloud.firestore {
     match /uniqueness_registry/{id} {
       allow read: if true;
       allow create: if isSignedIn();
-      allow update, delete: if isOwner(resource.data.userId) || isAdmin();
+      allow update, delete: if isAdmin() || (isVerified() && resource.data.get('userId', '') == request.auth.uid);
     }
 
     match /blocks/{blockId} {
-      allow get, list: if isSignedIn() && (resource.data.blockerId == request.auth.uid || resource.data.blockedId == request.auth.uid);
-      allow create: if isSignedIn() && request.resource.data.blockerId == request.auth.uid;
-      allow delete: if isSignedIn() && resource.data.blockerId == request.auth.uid;
+      allow get, list: if isSignedIn() && (resource.data.get('blockerId', '') == request.auth.uid || resource.data.get('blockedId', '') == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.get('blockerId', '') == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.get('blockerId', '') == request.auth.uid;
     }
 
     match /calls/{callId} {
-      allow get: if isSignedIn() && isValidId(callId) && (isAdmin() || isCallParty(resource.data));
-      allow list: if isSignedIn() && isCallParty(resource.data);
-      allow create: if isSignedIn() && isValidId(callId) && isValidCall(request.resource.data) && request.resource.data.callerId == request.auth.uid;
-      allow update: if isSignedIn() && isValidId(callId) && 
-                    (isCallParty(resource.data) || isAdmin()) && 
-                    isValidCall(request.resource.data) && (
+      allow get: if isSignedIn() && (isAdmin() || isCallParty(resource.data));
+      allow list: if isSignedIn() && (isAdmin() || (resource.data.get('callerId', '') == request.auth.uid || resource.data.get('receiverId', '') == request.auth.uid));
+      allow create: if isVerified() && isValidId(callId) && isValidCall(request.resource.data) && request.resource.data.get('callerId', '') == request.auth.uid;
+      allow update: if (isAdmin() || isCallParty(resource.data)) && 
+                    (
                       isAdmin() || (
+                        isVerified() && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'acceptedAt', 'endedAt']) &&
                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'endedAt']) &&
-                        request.resource.data.callerId == resource.data.callerId &&
-                        request.resource.data.receiverId == resource.data.receiverId
+                        request.resource.data.get('callerId', '') == resource.data.get('callerId', '') &&
+                        request.resource.data.get('receiverId', '') == resource.data.get('receiverId', '')
                       )
                     );
       allow delete: if isAdmin();
     }
 
     match /tickets/{ticketId} {
-      allow read, update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn();
+      allow read, update: if isAdmin() || (isVerified() && resource.data.get('userId', '') == request.auth.uid);
+      allow create: if isVerified();
     }
 
     match /earnings/{recordId} {
-      allow read: if isSignedIn() && (resource.data.creatorId == request.auth.uid || isAdmin());
+      allow read: if isAdmin() || (isVerified() && resource.data.get('creatorId', '') == request.auth.uid);
       allow write: if isAdmin();
     }
 
     match /subscriptions/{subId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow read: if isAdmin() || (isVerified() && resource.data.get('userId', '') == request.auth.uid);
       allow write: if isAdmin();
     }
 
     match /super_chats/{chatId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn();
+      allow read: if isAdmin() || (isVerified() && resource.data.get('userId', '') == request.auth.uid);
+      allow create: if isVerified();
       allow update, delete: if isAdmin();
     }
 
@@ -230,21 +238,22 @@ service cloud.firestore {
 
     match /ads/{adId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update, delete: if isOwner(resource.data.professorId) || isAdmin();
+      allow create: if isVerified();
+      allow update, delete: if isAdmin() || (isVerified() && resource.data.get('professorId', '') == request.auth.uid);
     }
 
     match /events/{eventId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update, delete: if isOwner(resource.data.creatorId) || isAdmin();
+      allow create: if isVerified();
+      allow update, delete: if isAdmin() || (isVerified() && resource.data.get('creatorId', '') == request.auth.uid);
     }
 
     match /stories/{storyId} {
        allow read: if isSignedIn();
-       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views']));
-       allow delete: if isOwner(resource.data.userId) || isAdmin();
+       allow create: if isVerified() && request.resource.data.get('userId', '') == request.auth.uid;
+       allow update: if (isVerified() && resource.data.get('userId', '') == request.auth.uid) || 
+                    (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views']));
+       allow delete: if (isVerified() && resource.data.get('userId', '') == request.auth.uid) || isAdmin();
     }
     
     match /settings/{settingId} {

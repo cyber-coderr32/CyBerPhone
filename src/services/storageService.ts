@@ -4,7 +4,7 @@ import { DEFAULT_PROFILE_PIC } from '../data/constants';
 import { safeJsonStringify } from '../lib/utils';
 import { checkContentSecurity } from './sentinelService';
 import { auth, db, storage, isFirebaseConfigured } from './firebaseClient';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { 
   collection, getDocs, doc, getDoc, setDoc, updateDoc, deleteDoc, query, where, orderBy, limit, addDoc, onSnapshot,
   getDocFromServer, getDocsFromServer, QuerySnapshot, DocumentData, arrayUnion, increment
@@ -166,6 +166,11 @@ export const findUserById = async (userId: string, authUserReference?: any): Pro
   
   const currentAuth = authUserReference || auth?.currentUser;
   const isOwner = currentAuth?.uid === userId;
+
+  // Processar cobranças automáticas de anúncios se for o dono
+  if (isOwner) {
+    checkAndProcessAdBilling(userId).catch(console.error);
+  }
   
   try {
     let docSnap;
@@ -459,6 +464,18 @@ export const registerUser = async (userData: any): Promise<User> => {
   }
 };
 
+export const recoverPassword = async (email: string): Promise<void> => {
+  if (!isFirebaseConfigured || !auth) {
+    throw new Error("Firebase Auth não está inicializado. Isso pode ser um problema de conexão temporário. Por favor, recarregue a página.");
+  }
+  try {
+    await sendPasswordResetEmail(auth, email);
+  } catch (e: any) {
+    console.error("Erro na recuperação de senha:", safeJsonStringify(e));
+    throw e;
+  }
+};
+
 // --- CONTEÚDO (FIRESTORE) ---
 
 export const getPosts = async (currentUserId?: string): Promise<Post[]> => {
@@ -647,7 +664,7 @@ export const toggleBlockUser = async (cur: string, target: string) => {
 };
 
 export const getMutualBlockedUserIds = async (userId: string): Promise<string[]> => {
-    if (!db || !userId || userId === 'anonymous') return [];
+    if (!db || !userId || userId === 'anonymous' || userId === 'guest') return [];
     
     // Verificamos se há um usuário autenticado no Firebase para evitar erros de permissão
     if (!auth?.currentUser) {
@@ -1800,9 +1817,142 @@ export const getActiveAds = async (): Promise<AdCampaign[]> => {
     }
 };
 
+export const checkAndProcessAdBilling = async (userId: string) => {
+    if (!db || !userId || userId === 'anonymous') return;
+    
+    try {
+        const adsRef = collection(db, 'ads');
+        const q = query(adsRef, where('professorId', '==', userId), where('isActive', '==', true));
+        const snap = await getDocs(q);
+        const ads = snap.docs.map(d => ({ ...d.data(), id: d.id } as AdCampaign));
+        
+        const now = Date.now();
+        const oneDayInMs = 24 * 60 * 60 * 1000;
+        
+        for (const ad of ads) {
+            // Se não tiver campos novos, inicializa para evitar erros
+            const endDate = ad.endDate || (ad.timestamp + (7 * oneDayInMs));
+            const isAutoRenew = ad.isAutoRenew !== undefined ? ad.isAutoRenew : true;
+            const renewalAmount = ad.renewalAmount || ad.budget || 0;
+
+            // 1. Notificação de término iminente (24h antes do endDate)
+            if (endDate - now <= oneDayInMs && endDate - now > 0 && !ad.notifiedRenewal) {
+                await createNotification(
+                    userId,
+                    'SYSTEM_AD',
+                    NotificationType.MESSAGE,
+                    undefined,
+                    'CyberPhone Ads',
+                );
+                
+                // Marcar como notificado
+                await updateDoc(doc(db, 'ads', ad.id), { notifiedRenewal: true });
+                console.log(`[ADS] Usuário ${userId} notificado sobre renovação do anúncio ${ad.id}`);
+            }
+            
+            // 2. Processar Expiração ou Renovação
+            if (now >= endDate) {
+                if (isAutoRenew) {
+                    const user = await findUserById(userId);
+                    if (user && (user.balance || 0) >= renewalAmount && renewalAmount > 0) {
+                        // Débito
+                        const newBalance = (user.balance || 0) - renewalAmount;
+                        await updateDoc(doc(db, 'profiles', userId), { balance: newBalance });
+                        await updateDoc(doc(db, 'public_profiles', userId), { balance: newBalance });
+                        
+                        // Log
+                        const txId = generateUUID();
+                        await setDoc(doc(db, 'transactions', txId), {
+                            id: txId,
+                            userId,
+                            amount: -renewalAmount,
+                            type: TransactionType.PURCHASE,
+                            description: `Renovação Automática de Anúncio: ${ad.title}`,
+                            status: 'COMPLETED',
+                            timestamp: now
+                        });
+                        
+                        // Estender
+                        const cycleDays = ad.billingCycle === 'WEEKLY' ? 7 : 1;
+                        const newDuration = cycleDays * oneDayInMs;
+                        
+                        await updateDoc(doc(db, 'ads', ad.id), {
+                            endDate: endDate + newDuration,
+                            lastBillingDate: now,
+                            notifiedRenewal: false,
+                            budget: increment(renewalAmount) // Incrementa o gasto total reportado
+                        });
+                        
+                        console.log(`[ADS] Anúncio ${ad.id} renovado com sucesso para ${userId}`);
+                    } else {
+                        // Saldo insuficiente, desativa
+                        await updateDoc(doc(db, 'ads', ad.id), { isActive: false });
+                        console.log(`[ADS] Anúncio ${ad.id} desativado por falta de saldo`);
+                        
+                        await createNotification(
+                            userId,
+                            'SYSTEM_AD',
+                            NotificationType.MESSAGE,
+                            undefined,
+                            'CyberPhone Ads: Sua campanha foi pausada por falta de saldo.'
+                        );
+                    }
+                } else {
+                    // Sem renovação automática, desativa
+                    await updateDoc(doc(db, 'ads', ad.id), { isActive: false });
+                    console.log(`[ADS] Anúncio ${ad.id} expirou e foi desativado (Sem Auto-Renovação)`);
+                }
+            } else if (isAutoRenew) {
+                // Checagem extra: se já estiver perto do fim (ex: menos de 2h) e o saldo atual for ZERO, podemos alertar mais agressivamente
+                // Mas por enquanto vamos manter a integridade do período pago.
+            }
+        }
+    } catch (err) {
+        console.error("[ADS] Erro ao processar cobrança de anúncios:", err);
+    }
+};
+
+export const toggleAdActive = async (adId: string, userId: string, active: boolean) => {
+    if (!db || !userId) return;
+    
+    // Se estiver tentando ativar, verificar saldo
+    if (active) {
+        const adSnap = await getDoc(doc(db, 'ads', adId));
+        if (adSnap.exists()) {
+            const ad = adSnap.data() as AdCampaign;
+            const user = await findUserById(userId);
+            const renewalAmount = ad.renewalAmount || ad.budget || 0;
+            
+            if (!user || (user.balance || 0) < renewalAmount) {
+                throw new Error("Saldo insuficiente para reativar esta campanha. Adicione fundos à sua carteira.");
+            }
+        }
+    }
+
+    await updateDoc(doc(db, 'ads', adId), { isActive: active });
+};
+
 export const createAd = async (ad: AdCampaign) => {
     if (!db) return;
-    await setDoc(doc(db, 'ads', ad.id), ad);
+    
+    // Garantir campos de ciclo de vida no momento da criação
+    const now = Date.now();
+    const oneDayInMs = 24 * 60 * 60 * 1000;
+    
+    // Se não vier definido, calculamos baseado no que foi passado
+    const cycleDays = ad.billingCycle === 'WEEKLY' ? 7 : 1;
+    
+    const enhancedAd = {
+        ...ad,
+        startDate: ad.startDate || now,
+        lastBillingDate: ad.lastBillingDate || now,
+        endDate: ad.endDate || (now + (cycleDays * oneDayInMs)),
+        isAutoRenew: ad.isAutoRenew !== undefined ? ad.isAutoRenew : true,
+        notifiedRenewal: false,
+        renewalAmount: ad.renewalAmount || ad.budget
+    };
+
+    await setDoc(doc(db, 'ads', ad.id), enhancedAd);
 };
 
 export const checkUserFrozen = async (userId: string) => {

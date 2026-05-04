@@ -294,9 +294,9 @@ const App: React.FC = () => {
                         prevUser.isVerified !== user.isVerified ||
                         prevUser.profilePicture !== user.profilePicture ||
                         prevUser.userType !== user.userType ||
-                        JSON.stringify(prevUser.followedUsers) !== JSON.stringify(user.followedUsers) ||
-                        JSON.stringify(prevUser.followers) !== JSON.stringify(user.followers) ||
-                        JSON.stringify(prevUser.blockedUserIds) !== JSON.stringify(user.blockedUserIds);
+                        safeJsonStringify(prevUser.followedUsers) !== safeJsonStringify(user.followedUsers) ||
+                        safeJsonStringify(prevUser.followers) !== safeJsonStringify(user.followers) ||
+                        safeJsonStringify(prevUser.blockedUserIds) !== safeJsonStringify(user.blockedUserIds);
 
                     if (!criticalFieldsChanged) return prevUser;
                     

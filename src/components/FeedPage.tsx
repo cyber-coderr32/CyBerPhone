@@ -45,6 +45,7 @@ const FeedPage: React.FC<FeedPageProps> = ({ currentUser, onNavigate, refreshUse
   const [isCreatingStory, setIsCreatingStory] = useState(false);
   const [feedError, setFeedError] = useState(false);
   
+  const [activeFeedTab, setActiveFeedTab] = useState<'all' | 'reels' | 'videos'>('all');
   const observerTarget = useRef<HTMLDivElement>(null);
 
   const loadData = useCallback(async (isRefresh = false) => {
@@ -128,31 +129,37 @@ const FeedPage: React.FC<FeedPageProps> = ({ currentUser, onNavigate, refreshUse
         let combined: FeedItem[] = [];
         let adPointer = 0;
 
-        // Estratégia de Mixagem do Feed
-        const firstBatch = normalPosts.slice(0, 3);
-        combined.push(...firstBatch);
+        if (activeFeedTab === 'reels') {
+          combined = reelsPosts;
+        } else if (activeFeedTab === 'videos') {
+          combined = filteredPosts.filter(p => p.type === PostType.VIDEO).sort((a, b) => b.timestamp - a.timestamp);
+        } else {
+          // Estratégia de Mixagem do Feed (Tab 'all')
+          const firstBatch = normalPosts.slice(0, 3);
+          combined.push(...firstBatch);
 
-        if (reelsPosts.length > 0) {
-          combined.push({ type: 'REELS_SHELF', items: reelsPosts.slice(0, 10) });
+          if (reelsPosts.length > 0) {
+            combined.push({ type: 'REELS_SHELF', items: reelsPosts.slice(0, 10) });
+          }
+
+          if (suggestions.length > 0) {
+            combined.push({ type: 'SUGGESTIONS' });
+          }
+
+          if (publicGroups.length > 0) {
+            combined.push({ type: 'GROUPS_SHELF', items: publicGroups.slice(0, 5) });
+          }
+
+          const remainingPosts = normalPosts.slice(3);
+          remainingPosts.forEach((post, idx) => {
+              combined.push(post);
+              // Only inject ads for non-premium users
+              if (!currentUser.isPremium && (idx + 1) % 5 === 0 && adPointer < activeAds.length) {
+                  combined.push(activeAds[adPointer]);
+                  adPointer++;
+              }
+          });
         }
-
-        if (suggestions.length > 0) {
-          combined.push({ type: 'SUGGESTIONS' });
-        }
-
-        if (publicGroups.length > 0) {
-          combined.push({ type: 'GROUPS_SHELF', items: publicGroups.slice(0, 5) });
-        }
-
-        const remainingPosts = normalPosts.slice(3);
-        remainingPosts.forEach((post, idx) => {
-            combined.push(post);
-            // Only inject ads for non-premium users
-            if (!currentUser.isPremium && (idx + 1) % 5 === 0 && adPointer < activeAds.length) {
-                combined.push(activeAds[adPointer]);
-                adPointer++;
-            }
-        });
 
         setAllItems(combined);
         
@@ -168,7 +175,7 @@ const FeedPage: React.FC<FeedPageProps> = ({ currentUser, onNavigate, refreshUse
     } finally {
         setLoading(false);
     }
-  }, [currentUser.id, displayLimit, t, onNavigate, refreshUser]);
+  }, [currentUser.id, currentUser.isPremium, displayLimit, t, onNavigate, refreshUser, activeFeedTab]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -227,7 +234,7 @@ const FeedPage: React.FC<FeedPageProps> = ({ currentUser, onNavigate, refreshUse
         }
         if (item.type === 'SUGGESTIONS') {
           return (
-            <div key="sugg" className="rounded-[2.5rem] p-6 md:p-8 text-white shadow-2xl relative overflow-hidden animate-fade-in my-6 border-4 border-white/10" style={{ backgroundColor: 'var(--brand-color)' }}>
+            <div key="sugg" className="rounded-[2.5rem] p-6 md:p-8 text-white shadow-2xl relative overflow-hidden animate-fade-in border-4 border-white/10" style={{ backgroundColor: 'var(--brand-color)' }}>
                 <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-black/20 pointer-events-none"></div>
                 <SparklesIcon className="absolute -right-10 -bottom-10 w-64 h-64 opacity-10 rotate-12" />
                 <div className="flex items-center justify-between mb-6 relative z-10">
@@ -252,7 +259,7 @@ const FeedPage: React.FC<FeedPageProps> = ({ currentUser, onNavigate, refreshUse
         }
         if (item.type === 'REELS_SHELF') {
           return (
-            <div key="reels-shelf" className="my-4">
+            <div key="reels-shelf" className="">
               <div className="flex items-center gap-2 mb-3 px-2">
                   <FilmIcon className="h-5 w-5 text-purple-600" />
                   <h3 className="font-black text-base dark:text-white uppercase tracking-tight">{t('trending_reels')}</h3>
@@ -280,7 +287,7 @@ const FeedPage: React.FC<FeedPageProps> = ({ currentUser, onNavigate, refreshUse
         }
         if (item.type === 'GROUPS_SHELF') {
           return (
-            <div key="groups-shelf" className="my-6 bg-gray-50 dark:bg-white/5 p-5 rounded-[2rem] border border-gray-100 dark:border-white/5">
+            <div key="groups-shelf" className="bg-gray-50 dark:bg-white/5 p-5 rounded-[2rem] border border-gray-100 dark:border-white/5">
               <div className="flex items-center gap-2 mb-3">
                   <UserGroupIcon className="h-5 w-5 text-blue-600" />
                   <h3 className="font-black text-base dark:text-white uppercase tracking-tight">{t('communities')}</h3>
@@ -415,10 +422,32 @@ const FeedPage: React.FC<FeedPageProps> = ({ currentUser, onNavigate, refreshUse
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <main className="lg:col-span-8 space-y-8">
+        <main className="lg:col-span-8 space-y-2">
+          {/* TAB SWITCHER */}
+          <div className="flex items-center gap-1 bg-white dark:bg-white/5 p-1.5 rounded-3xl border border-gray-100 dark:border-white/10 w-full overflow-x-auto no-scrollbar">
+            <button 
+              onClick={() => setActiveFeedTab('all')}
+              className={`flex-1 min-w-[80px] py-3 rounded-2xl text-[11px] font-black uppercase tracking-tighter transition-all ${activeFeedTab === 'all' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10'}`}
+            >
+              Feed Principal
+            </button>
+            <button 
+              onClick={() => setActiveFeedTab('reels')}
+              className={`flex-1 min-w-[80px] py-3 rounded-2xl text-[11px] font-black uppercase tracking-tighter transition-all ${activeFeedTab === 'reels' ? 'bg-purple-600 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10'}`}
+            >
+              Reels
+            </button>
+            <button 
+              onClick={() => setActiveFeedTab('videos')}
+              className={`flex-1 min-w-[80px] py-3 rounded-2xl text-[11px] font-black uppercase tracking-tighter transition-all ${activeFeedTab === 'videos' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10'}`}
+            >
+              Vídeos
+            </button>
+          </div>
+
           <CreatePost currentUser={currentUser} onPostCreated={() => loadData(true)} refreshUser={refreshUser} />
           
-          <div className="space-y-8">
+          <div className="space-y-px">
             {feedError ? (
                 <div className="py-20 text-center flex flex-col items-center">
                     <p className="text-red-500 font-bold mb-4">{t('feed_load_error')}</p>

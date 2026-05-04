@@ -416,6 +416,14 @@ export interface AdCampaign {
     clicks: number;
     spend: number;
   };
+  // Novos campos para Ciclo de Vida e Cobrança Recorrente
+  billingCycle: 'DAILY' | 'WEEKLY';
+  startDate: number;
+  endDate: number;
+  lastBillingDate: number;
+  isAutoRenew: boolean;
+  notifiedRenewal?: boolean;
+  renewalAmount: number;
 }
 
 export interface EarningRecord {

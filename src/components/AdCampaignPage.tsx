@@ -60,6 +60,8 @@ export const AdCampaignPage: React.FC<AdCampaignPageProps> = ({ currentUser, ref
   const [maxAge, setMaxAge] = useState<number>(65);
   const [durationDays, setDurationDays] = useState<number>(7);
   const [dailyReachGoal, setDailyReachGoal] = useState<number>(5000);
+  const [billingCycle, setBillingCycle] = useState<'DAILY' | 'WEEKLY'>('WEEKLY');
+  const [isAutoRenew, setIsAutoRenew] = useState(true);
   
   // Advanced Location State
   const [locations, setLocations] = useState<string[]>([]);
@@ -78,9 +80,17 @@ export const AdCampaignPage: React.FC<AdCampaignPageProps> = ({ currentUser, ref
   const minDailyBudget = settings?.adMinBudget || 0.20;
 
   const calculatedTotalBudget = useMemo(() => {
+    // Se o ciclo for semanal e duration for 1 dia, forçamos o mínimo do ciclo?
+    // Não, vamos usar o durationDays como o "investimento inicial"
     const costPerDay = (dailyReachGoal / 1000) * costPer1kReach;
     return Math.max(costPerDay * durationDays, durationDays * minDailyBudget);
   }, [dailyReachGoal, durationDays, costPer1kReach, minDailyBudget]);
+
+  const renewalAmount = useMemo(() => {
+    const costPerDay = (dailyReachGoal / 1000) * costPer1kReach;
+    const days = billingCycle === 'WEEKLY' ? 7 : 1;
+    return Math.max(costPerDay * days, days * minDailyBudget);
+  }, [dailyReachGoal, billingCycle, costPer1kReach, minDailyBudget]);
 
   const hasBalance = (currentUser.balance || 0) >= calculatedTotalBudget;
   const followerCount = currentUser.followers?.length || 0;
@@ -143,6 +153,8 @@ export const AdCampaignPage: React.FC<AdCampaignPageProps> = ({ currentUser, ref
       }
 
       // 2. Criar Anúncio com Segmentação Rigorosa
+      const oneDayInMs = 24 * 60 * 60 * 1000;
+      const now = Date.now();
       const newAd: AdCampaign = {
         id: generateUUID(),
         professorId: currentUser.id,
@@ -160,8 +172,15 @@ export const AdCampaignPage: React.FC<AdCampaignPageProps> = ({ currentUser, ref
         imageUrl,
         linkUrl: linkUrl || '#',
         ctaText,
-        timestamp: Date.now(),
-        locations: locations // Persistência Rigorosa dos locais
+        timestamp: now,
+        locations: locations, // Persistência Rigorosa dos locais
+        billingCycle,
+        startDate: now,
+        endDate: now + (durationDays * oneDayInMs),
+        lastBillingDate: now,
+        isAutoRenew,
+        renewalAmount,
+        notifiedRenewal: false
       };
 
       await createAd(newAd);
@@ -470,7 +489,7 @@ export const AdCampaignPage: React.FC<AdCampaignPageProps> = ({ currentUser, ref
                        <div className="space-y-12">
                           <div className="space-y-5">
                              <div className="flex justify-between items-center">
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Tempo de Destaque</label>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Investimento Inicial</label>
                                 <span className="bg-blue-50 dark:bg-blue-900/20 text-blue-600 px-4 py-1.5 rounded-xl text-xs font-black shadow-sm">{durationDays} dias</span>
                              </div>
                              <input type="range" min={1} max={30} value={durationDays} onChange={e => setDurationDays(parseInt(e.target.value))} className="w-full h-2 bg-gray-100 dark:bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-600" />
@@ -484,14 +503,49 @@ export const AdCampaignPage: React.FC<AdCampaignPageProps> = ({ currentUser, ref
                              <input type="range" min={400} max={100000} step={200} value={dailyReachGoal} onChange={e => setDailyReachGoal(parseInt(e.target.value))} className="w-full h-2 bg-gray-100 dark:bg-white/10 rounded-full appearance-none cursor-pointer accent-green-600" />
                           </div>
 
-                          <div className="p-6 bg-blue-50 dark:bg-blue-900/10 rounded-2xl border border-blue-100 dark:border-blue-900/30">
-                             <div className="flex items-center gap-3 mb-2">
-                                <ShieldCheckIcon className="h-5 w-5 text-blue-600" />
-                                <span className="text-[10px] font-black text-blue-800 dark:text-blue-400 uppercase">Garantia de Entrega</span>
+                          <div className="space-y-5">
+                             <div className="flex justify-between items-center">
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Frequência de Renovação</label>
+                                <div className="flex gap-2">
+                                   <button 
+                                     onClick={() => setBillingCycle('DAILY')}
+                                     className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${billingCycle === 'DAILY' ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 dark:bg-white/10 text-gray-400 hover:bg-gray-200'}`}
+                                   >
+                                     Diário
+                                   </button>
+                                   <button 
+                                     onClick={() => setBillingCycle('WEEKLY')}
+                                     className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${billingCycle === 'WEEKLY' ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 dark:bg-white/10 text-gray-400 hover:bg-gray-200'}`}
+                                   >
+                                     Semanal
+                                   </button>
+                                </div>
                              </div>
-                             <p className="text-[10px] text-blue-700 dark:text-blue-300/80 leading-relaxed">
-                                Seu conteúdo será exibido em posições privilegiadas para garantir que seu conhecimento alcance o maior número de alunos qualificados.
-                             </p>
+                             
+                             <div 
+                               onClick={() => setIsAutoRenew(!isAutoRenew)}
+                               className={`p-5 rounded-[2rem] border-2 cursor-pointer transition-all flex items-center justify-between group ${isAutoRenew ? 'border-green-500 bg-green-50/50 dark:bg-green-500/10' : 'border-gray-100 dark:border-white/5 bg-gray-50/50'}`}
+                             >
+                                <div>
+                                   <p className="text-[10px] font-black dark:text-white uppercase tracking-wider flex items-center gap-2">
+                                      {isAutoRenew ? <ShieldCheckIcon className="h-4 w-4 text-green-500" /> : <XMarkIcon className="h-4 w-4 text-gray-400" />}
+                                      Renovação Automática
+                                   </p>
+                                   <p className="text-[9px] text-gray-400 font-bold tracking-tight mt-1">O anúncio não para até você desativar manualmente.</p>
+                                </div>
+                                <div className={`w-12 h-6 rounded-full relative transition-all ${isAutoRenew ? 'bg-green-500' : 'bg-gray-300 dark:bg-white/10'}`}>
+                                   <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-md transition-all ${isAutoRenew ? 'left-7' : 'left-1'}`}></div>
+                                </div>
+                             </div>
+
+                             {isAutoRenew && (
+                               <div className="flex items-center gap-2 px-4 py-2 bg-green-500/10 border border-green-500/20 rounded-xl animate-pulse">
+                                  <InformationCircleIcon className="h-4 w-4 text-green-500" />
+                                  <p className="text-[9px] text-green-600 font-black uppercase tracking-tight">
+                                     Será debitado ${renewalAmount.toFixed(2)} a cada {billingCycle === 'WEEKLY' ? '7 dias' : 'dia'}.
+                                  </p>
+                               </div>
+                             )}
                           </div>
                        </div>
 
