@@ -24,6 +24,21 @@ service cloud.firestore {
       );
     }
 
+    function isCallParty(data) {
+      return data != null && (
+        data.get('callerId', '') == request.auth.uid || 
+        data.get('receiverId', '') == request.auth.uid
+      );
+    }
+
+    function isValidCall(data) {
+      return data.get('callerId', '') is string && data.callerId.size() <= 128 &&
+             data.get('receiverId', '') is string && data.receiverId.size() <= 128 &&
+             data.get('type', '') in ['VOICE', 'VIDEO'] &&
+             data.get('status', '') in ['RINGING', 'ACCEPTED', 'REJECTED', 'ENDED', 'MISSED', 'TIMED_OUT'] &&
+             data.get('timestamp', 0) is number;
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -69,7 +84,7 @@ service cloud.firestore {
     }
 
     match /posts/{postId} {
-      allow read: if isSignedIn();
+      allow read: if true;
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if isSignedIn() && (
         resource.data.userId == request.auth.uid || 
@@ -169,6 +184,22 @@ service cloud.firestore {
       allow get, list: if isSignedIn() && (resource.data.blockerId == request.auth.uid || resource.data.blockedId == request.auth.uid);
       allow create: if isSignedIn() && request.resource.data.blockerId == request.auth.uid;
       allow delete: if isSignedIn() && resource.data.blockerId == request.auth.uid;
+    }
+
+    match /calls/{callId} {
+      allow get: if isSignedIn() && isValidId(callId) && (isAdmin() || isCallParty(resource.data));
+      allow list: if isSignedIn() && isCallParty(resource.data);
+      allow create: if isSignedIn() && isValidId(callId) && isValidCall(request.resource.data) && request.resource.data.callerId == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(callId) && 
+                    (isCallParty(resource.data) || isAdmin()) && 
+                    isValidCall(request.resource.data) && (
+                      isAdmin() || (
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'endedAt']) &&
+                        request.resource.data.callerId == resource.data.callerId &&
+                        request.resource.data.receiverId == resource.data.receiverId
+                      )
+                    );
+      allow delete: if isAdmin();
     }
 
     match /tickets/{ticketId} {

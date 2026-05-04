@@ -394,9 +394,31 @@
         "timestamp": { "type": "number" }
       },
       "required": ["userId", "productId", "link", "sellerId", "timestamp"]
+    },
+    "Call": {
+      "title": "Call",
+      "description": "Real-time call signaling document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "callerId": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerProfilePic": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "type": { "type": "string", "enum": ["VOICE", "VIDEO"] },
+        "status": { "type": "string", "enum": ["RINGING", "ACCEPTED", "REJECTED", "ENDED", "MISSED", "TIMED_OUT"] },
+        "timestamp": { "type": "number" },
+        "acceptedAt": { "type": "number" },
+        "endedAt": { "type": "number" }
+      },
+      "required": ["callerId", "receiverId", "type", "status", "timestamp"]
     }
   },
   "firestore": {
+    "/calls/{callId}": {
+      "schema": "Call",
+      "description": "Real-time call signaling"
+    },
     "/earnings/{recordId}": {
       "schema": "EarningRecord",
       "description": "Historical earnings data"
