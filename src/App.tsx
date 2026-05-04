@@ -208,6 +208,7 @@ const App: React.FC = () => {
             setPageParams(newParams);
         }
     }, []);
+    // para alterar 
 
     // --- LÓGICA DE STATUS ONLINE (PROFISSIONAL) ---
     useEffect(() => {
